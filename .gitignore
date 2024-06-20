@@ -1,5 +1,6 @@
 # Project-specific ignores
 .history
+.idea
 .godot
 obj/
 nupkg/*
@@ -7,6 +8,7 @@ nupkg/*
 *.*.import
 TestResults/
 gdunit4_testadapter/
+**GdUnitRunner_*.cfg
 
 # Mono-specific ignores
 .mono/

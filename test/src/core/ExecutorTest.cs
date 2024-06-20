@@ -4,12 +4,13 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
+using GdUnit4.Asserts;
+using GdUnit4.Core;
+using GdUnit4.Executions;
+
 using static Assertions;
 using static TestEvent.TYPE;
 using static TestReport.ReportType;
-using GdUnit4.Asserts;
-using Executions;
-
 
 [TestSuite]
 #pragma warning disable CA1001 // Types that own disposable fields should be disposable
@@ -32,6 +33,15 @@ public class ExecutorTest : ITestEventListener
         executor = new Executor();
         executor.AddTestEventListener(this);
     }
+
+    [BeforeTest]
+    public void InitTest()
+        => Godot.ProjectSettings.SetSetting(GdUnit4Settings.REPORT_ORPHANS, true);
+
+    [AfterTest]
+    public void TeardownTest()
+        => Godot.ProjectSettings.SetSetting(GdUnit4Settings.REPORT_ORPHANS, true);
+
 
     private static TestSuite LoadTestSuite(string clazzPath)
     {
@@ -56,12 +66,11 @@ public class ExecutorTest : ITestEventListener
         events.Add(e);
     }
 
-    private async Task<List<TestEvent>> ExecuteTestSuite(TestSuite testSuite, bool enableOrphanDetection = true)
+    private async Task<List<TestEvent>> ExecuteTestSuite(TestSuite testSuite)
     {
         var testSuiteName = testSuite.Name;
         events.Clear();
 
-        executor.ReportOrphanNodesEnabled = enableOrphanDetection;
         if (verbose)
             Console.WriteLine($"Execute {testSuiteName}.");
         await executor.ExecuteInternally(testSuite);
@@ -501,7 +510,8 @@ public class ExecutorTest : ITestEventListener
         AssertArray(testSuite.TestCases).Extract("Name").ContainsExactly(new string[] { "TestCase1", "TestCase2" });
 
         // simulate test suite execution with disabled orphan detection
-        var events = await ExecuteTestSuite(testSuite, false);
+        Godot.ProjectSettings.SetSetting(GdUnit4Settings.REPORT_ORPHANS, false);
+        var events = await ExecuteTestSuite(testSuite);
 
         AssertTestCaseNames(events)
             .ContainsExactly(ExpectedEvents("TestSuiteFailAndOrphansDetected", "TestCase1", "TestCase2"));
@@ -648,14 +658,15 @@ public class ExecutorTest : ITestEventListener
         AssertArray(testSuite.TestCases).Extract("Name").ContainsExactly(new string[] {
             "ParameterizedBoolValue",
             "ParameterizedIntValues",
-            "ParameterizedIntValuesFail" });
+            "ParameterizedIntValuesFail",
+            "ParameterizedSingleTest" });
 
         var events = await ExecuteTestSuite(testSuite);
 
         var suiteName = "TestSuiteParameterizedTests";
         var expectedEvents = new List<ITuple>
         {
-            Tuple(TESTSUITE_BEFORE, suiteName, "Before", 3)
+            Tuple(TESTSUITE_BEFORE, suiteName, "Before", 4)
         };
         expectedEvents.AddRange(ExpectedTestCase(suiteName, "ParameterizedBoolValue", new List<object[]> {
             new object[] { 0, false }, new object[] { 1, true } }));
@@ -663,6 +674,8 @@ public class ExecutorTest : ITestEventListener
             new object[] { 1, 2, 3, 6 }, new object[] { 3, 4, 5, 12 }, new object[] { 6, 7, 8, 21 } }));
         expectedEvents.AddRange(ExpectedTestCase(suiteName, "ParameterizedIntValuesFail", new List<object[]> {
             new object[] { 1, 2, 3, 6 }, new object[] { 3, 4, 5, 11 }, new object[] { 6, 7, 8, 22 } }));
+        expectedEvents.AddRange(ExpectedTestCase(suiteName, "ParameterizedSingleTest", new List<object[]> {
+            new object[] { true } }));
         expectedEvents.Add(Tuple(TESTSUITE_AFTER, suiteName, "After", 0));
         AssertTestCaseNames(events).ContainsExactly(expectedEvents);
 
@@ -683,6 +696,11 @@ public class ExecutorTest : ITestEventListener
             Tuple(TESTCASE_AFTER, TestCase.BuildDisplayName("ParameterizedIntValuesFail", new object[] { 3, 4, 5, 11 }), false, false, true, false),
             Tuple(TESTCASE_AFTER, TestCase.BuildDisplayName("ParameterizedIntValuesFail", new object[] { 6, 7, 8, 22 }), false, false, true, false),
             Tuple(TESTCASE_AFTER, TestCase.BuildDisplayName("ParameterizedIntValuesFail"), false, false, true, false),
+            // the single parameterized test
+            Tuple(TESTCASE_BEFORE, "ParameterizedSingleTest", true, false, false, false),
+            Tuple(TESTCASE_BEFORE, "ParameterizedSingleTest(True)", true, false, false, false),
+            Tuple(TESTCASE_AFTER, "ParameterizedSingleTest(True)", true, false, false, false),
+            Tuple(TESTCASE_AFTER, "ParameterizedSingleTest", true, false, false, false),
             // test suite is failing
             Tuple(TESTSUITE_AFTER, "After", false, false, true, false)
         );
@@ -710,4 +728,53 @@ public class ExecutorTest : ITestEventListener
             Tuple(TESTSUITE_AFTER, "After", new List<TestReport>())
         );
     }
+
+    [TestCase(Description = "Verifies the exceptions are catches the right message as failure.")]
+    public async Task ExecuteTestWithExceptions()
+    {
+        var testSuite = LoadTestSuite("src/core/resources/testsuites/mono/TestSuiteAllTestsFailWithExceptions.cs");
+        AssertArray(testSuite.TestCases).Extract("Name").ContainsExactly(new string[] { "ExceptionIsThrownOnSceneInvoke", "ExceptionAtAsyncMethod", "ExceptionAtSyncMethod" });
+
+        var events = await ExecuteTestSuite(testSuite);
+
+        AssertTestCaseNames(events)
+            .ContainsExactly(ExpectedEvents("TestSuiteAllTestsFailWithExceptions", "ExceptionIsThrownOnSceneInvoke", "ExceptionAtAsyncMethod", "ExceptionAtSyncMethod"));
+
+        // we expect all tests are failing and commits failures
+        AssertEventCounters(events).ContainsExactly(
+            Tuple(TESTSUITE_BEFORE, "Before", 0, 0, 0),
+            Tuple(TESTCASE_BEFORE, "ExceptionIsThrownOnSceneInvoke", 0, 0, 0),
+            Tuple(TESTCASE_AFTER, "ExceptionIsThrownOnSceneInvoke", 0, 1, 0),
+            Tuple(TESTCASE_BEFORE, "ExceptionAtAsyncMethod", 0, 0, 0),
+            Tuple(TESTCASE_AFTER, "ExceptionAtAsyncMethod", 0, 1, 0),
+            Tuple(TESTCASE_BEFORE, "ExceptionAtSyncMethod", 0, 0, 0),
+            Tuple(TESTCASE_AFTER, "ExceptionAtSyncMethod", 0, 1, 0),
+            Tuple(TESTSUITE_AFTER, "After", 0, 0, 0)
+        );
+        AssertEventStates(events).ContainsExactly(
+            Tuple(TESTSUITE_BEFORE, "Before", true, false, false, false),
+            Tuple(TESTCASE_BEFORE, "ExceptionIsThrownOnSceneInvoke", true, false, false, false),
+            Tuple(TESTCASE_AFTER, "ExceptionIsThrownOnSceneInvoke", false, false, true, false),
+            Tuple(TESTCASE_BEFORE, "ExceptionAtAsyncMethod", true, false, false, false),
+            Tuple(TESTCASE_AFTER, "ExceptionAtAsyncMethod", false, false, true, false),
+            Tuple(TESTCASE_BEFORE, "ExceptionAtSyncMethod", true, false, false, false),
+            Tuple(TESTCASE_AFTER, "ExceptionAtSyncMethod", false, false, true, false),
+            // report suite is not success, is failed
+            Tuple(TESTSUITE_AFTER, "After", false, false, true, false)
+        );
+        // check for failure reports
+        AssertReports(events).Contains(
+            Tuple(TESTSUITE_BEFORE, "Before", new List<TestReport>()),
+            Tuple(TESTCASE_AFTER, "ExceptionIsThrownOnSceneInvoke", new List<TestReport>() { new(FAILURE, 12, """
+                Test Exception
+                """) }),
+            Tuple(TESTCASE_AFTER, "ExceptionAtAsyncMethod", new List<TestReport>() { new(FAILURE, 24, """
+                outer exception
+                """) }),
+            Tuple(TESTCASE_AFTER, "ExceptionAtSyncMethod", new List<TestReport>() { new(FAILURE, 28, """
+                outer exception
+                """) }),
+            Tuple(TESTSUITE_AFTER, "After", new List<TestReport>()));
+    }
+
 }

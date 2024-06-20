@@ -4,12 +4,14 @@ using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.RegularExpressions;
 
 using Exceptions;
-using System.Runtime.ExceptionServices;
 using static GdUnit4.TestReport;
 
 internal abstract class ExecutionStage<T> : IExecutionStage
@@ -62,7 +64,7 @@ internal abstract class ExecutionStage<T> : IExecutionStage
         {
             ReportAsFailure(context, e);
         }
-        catch (TargetInvocationException e)
+        catch (Exception e)
         {
             if (e.GetBaseException() is TestFailedException ex)
             {
@@ -74,11 +76,6 @@ internal abstract class ExecutionStage<T> : IExecutionStage
                 ReportUnexpectedException(context, e);
             }
         }
-        // unexpected exceptions
-        catch (Exception e)
-        {
-            ReportUnexpectedException(context, e);
-        }
     }
 
     private static void ReportAsFailure(ExecutionContext context, TestFailedException e)
@@ -89,10 +86,17 @@ internal abstract class ExecutionStage<T> : IExecutionStage
 
     private static void ReportUnexpectedException(ExecutionContext context, Exception exception)
     {
-        var ei = ExceptionDispatchInfo.Capture(exception.InnerException ?? exception);
-        var stack = new StackTrace(ei.SourceException, true);
-        var lineNumber = ScanFailureLineNumber(stack);
-        context.ReportCollector.Consume(new TestReport(ReportType.FAILURE, lineNumber, ei.SourceException.Message, stack.ToString()));
+        if (exception is TargetInvocationException)
+        {
+            var ei = ExceptionDispatchInfo.Capture(exception.InnerException ?? exception);
+            ReportUnexpectedException(context, ei.SourceException);
+        }
+        else
+        {
+            var stack = new StackTrace(exception, true);
+            var lineNumber = ScanFailureLineNumber(stack);
+            context.ReportCollector.Consume(new TestReport(ReportType.FAILURE, lineNumber, exception.Message, TrimStackTrace(stack.ToString())));
+        }
     }
 
     private static int ScanFailureLineNumber(StackTrace stack)
@@ -104,8 +108,28 @@ internal abstract class ExecutionStage<T> : IExecutionStage
             if (frame.GetMethod()?.IsDefined(typeof(TestCaseAttribute)) ?? false)
                 return frame.GetFileLineNumber();
         }
-        return stack.FrameCount > 1 ? stack.GetFrame(1)!.GetFileLineNumber() : -1;
+        return stack.FrameCount > 1 ? stack.GetFrame(0)!.GetFileLineNumber() : -1;
     }
+
+    internal static string TrimStackTrace(string stackTrace)
+    {
+        if (stackTrace.Length == 0)
+            return stackTrace;
+
+        StringBuilder result = new(stackTrace.Length);
+        var stackFrames = Regex.Split(stackTrace, Environment.NewLine);
+
+        foreach (var stackFrame in stackFrames)
+        {
+            if (string.IsNullOrEmpty(stackFrame) || stackFrame.Contains("Microsoft.VisualStudio.TestTools"))
+                continue;
+
+            result.Append(stackFrame);
+            result.Append(Environment.NewLine);
+        }
+        return result.ToString();
+    }
+
 
     private async Task ExecuteStage(ExecutionContext context)
     {

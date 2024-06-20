@@ -57,18 +57,32 @@ internal sealed class SceneRunner : ISceneRunner
     private double TimeFactor { get; set; }
     private int SavedIterationsPerSecond { get; set; }
     private InputEvent? LastInputEvent { get; set; }
+    private readonly ICollection<string> actionOnPress = new HashSet<string>();
     private readonly ICollection<Key> keyOnPress = new HashSet<Key>();
     private readonly ICollection<MouseButton> mouseButtonOnPress = new HashSet<MouseButton>();
 
-    public SceneRunner(string resourcePath, bool autoFree = false, bool verbose = false)
+    public SceneRunner(string resourcePath, bool autoFree = false, bool verbose = false) : this(LoadScene(resourcePath), autoFree, verbose)
     {
-        if (!Godot.FileAccess.FileExists(resourcePath))
-            throw new FileNotFoundException($"GdUnitSceneRunner: Can't load scene by given resource path: '{resourcePath}'. The resource not exists.");
+    }
+
+    private static Node LoadScene(string resourcePath)
+    {
+        if (!ResourceLoader.Exists(resourcePath))
+            throw new FileNotFoundException($"GdUnitSceneRunner: Can't load scene by given resource path: '{resourcePath}'. The resource does not exists.");
+        if (!resourcePath.EndsWith(".tscn") && !resourcePath.EndsWith(".scn") && !resourcePath.StartsWith("uid://"))
+            throw new ArgumentException($"GdUnitSceneRunner: The given resource: '{resourcePath}' is not a scene.");
+
+        return ((PackedScene)ResourceLoader.Load(resourcePath)).Instantiate();
+    }
+
+
+    public SceneRunner(Node currentScene, bool autoFree = false, bool verbose = false)
+    {
         Verbose = verbose;
         SceneAutoFree = autoFree;
         Executions.ExecutionContext.RegisterDisposable(this);
         SceneTree = (SceneTree)Engine.GetMainLoop();
-        CurrentScene = ((PackedScene)ResourceLoader.Load(resourcePath)).Instantiate();
+        CurrentScene = currentScene;
         SceneTree.Root.AddChild(CurrentScene);
         SavedIterationsPerSecond = Engine.PhysicsTicksPerSecond;
         SetTimeFactor(1.0);
@@ -90,6 +104,14 @@ internal sealed class SceneRunner : ISceneRunner
                 SimulateKeyRelease(key);
         }
         keyOnPress.Clear();
+
+        foreach (var action in actionOnPress)
+        {
+            if (Input.IsActionPressed(action))
+                SimulateActionRelease(action);
+        }
+        actionOnPress.Clear();
+
         Input.FlushBufferedEvents();
     }
 
@@ -150,9 +172,11 @@ internal sealed class SceneRunner : ISceneRunner
     /// <returns></returns>
     private SceneRunner HandleInputEvent(InputEvent inputEvent)
     {
-        if (inputEvent is InputEventMouse ie)
-            Input.WarpMouse(ie.Position);
+        if (inputEvent is InputEventMouse mouseEvent)
+            Input.WarpMouse(mouseEvent.Position);
         Input.ParseInputEvent(inputEvent);
+        if (inputEvent is InputEventAction actionEvent)
+            HandleActionEvent(actionEvent);
         Input.FlushBufferedEvents();
 
         if (GodotObject.IsInstanceValid(CurrentScene))
@@ -167,6 +191,46 @@ internal sealed class SceneRunner : ISceneRunner
         // save last input event needs to be merged with next InputEventMouseButton
         LastInputEvent = inputEvent;
         return this;
+    }
+
+    private static bool HandleActionEvent(InputEventAction actionEvent)
+    {
+        if (!InputMap.EventIsAction(actionEvent, actionEvent.Action, true))
+            return false;
+        if (actionEvent.IsPressed())
+            Input.ActionPress(actionEvent.Action, InputMap.ActionGetDeadzone(actionEvent.Action));
+        else
+            Input.ActionRelease(actionEvent.Action);
+        return true;
+    }
+
+    public ISceneRunner SimulateActionPress(string action)
+    {
+        var inputEvent = new InputEventAction
+        {
+            Pressed = true,
+            Action = action
+        };
+        actionOnPress.Add(action);
+        return HandleInputEvent(inputEvent);
+    }
+
+    public ISceneRunner SimulateActionPressed(string action)
+    {
+        SimulateActionPress(action);
+        SimulateActionRelease(action);
+        return this;
+    }
+
+    public ISceneRunner SimulateActionRelease(string action)
+    {
+        var inputEvent = new InputEventAction
+        {
+            Pressed = false,
+            Action = action
+        };
+        actionOnPress.Remove(action);
+        return HandleInputEvent(inputEvent);
     }
 
     public ISceneRunner SimulateKeyPress(Key keyCode, bool shiftPressed = false, bool controlPressed = false)

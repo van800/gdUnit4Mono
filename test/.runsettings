@@ -7,6 +7,9 @@
         <TargetFrameworks>net7.0;net8.0</TargetFrameworks>
         <TestSessionTimeout>300000</TestSessionTimeout>
         <TreatNoTestsAsError>true</TreatNoTestsAsError>
+        <EnvironmentVariables>
+            <GODOT_BIN>d:\development\Godot_v4.2.1-stable_mono_win64\Godot_v4.2.1-stable_mono_win64.exe</GODOT_BIN>
+        </EnvironmentVariables>
     </RunConfiguration>
 
     <LoggerRunSettings>
@@ -34,9 +37,9 @@
     </TestRunParameters>
 
     <GdUnit4>
-        <!-- Additonal Godot runtime parameters-->
-        <Parameters></Parameters>
-        <!-- Controlls the Display name attribute of the TestCase. Allowed values are SimpleName and FullyQualifiedName.
+        <!-- Additional Godot runtime parameters-->
+        <Parameters>--verbose</Parameters>
+        <!-- Controls the Display name attribute of the TestCase. Allowed values are SimpleName and FullyQualifiedName.
              This likely determines how the test names are displayed in the test results.-->
         <DisplayName>FullyQualifiedName</DisplayName>
     </GdUnit4>
